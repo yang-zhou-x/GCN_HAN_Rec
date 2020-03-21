@@ -1,2 +1,4 @@
-# GCN_HAN_Rec
-Social Recommendation based on Recurrent GCN and HAN
+# SRG
+**S**ocial **R**ecommendation based on Recurrent **G**CN and HAN
+
+first version
