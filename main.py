@@ -119,13 +119,13 @@ if __name__ == '__main__':
         'patience': 100,
         'device': 'cuda' if t.cuda.is_available() else 'cpu',
         'num_meta_path': 5,
-        'head_list': [8],
+        'head_list': [16],
         'fc_units': 32,
         'name': 'ciao',
         'seed': 2020,
         'train_size': .8,
-        'embedding_size': 64,
-        'in_feats': 64,
+        'embedding_size': 128,
+        'in_feats': 128,
         'num_b': 4,
         'drop_out': .5
     }
