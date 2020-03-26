@@ -6,14 +6,8 @@
 @Contact : yzhou.x@icloud.com
 '''
 
-import torch as t
-import torch.nn as nn
-import torch.nn.functional as F
-from dgl.nn.pytorch import GraphConv, GATConv
-from dgl import metapath_reachable_graph
 
-
-class RecGCNBlock(nn.Module):
+class RecGCNblock(nn.Module):
     '''Recurrent GCN block with GRU.
 
     Parameter
@@ -23,10 +17,10 @@ class RecGCNBlock(nn.Module):
     Input
     -----
         graph: dgl.DGLGraph
-        feat: (#nodes, in_feats)
+        h: (#nodes, in_feats), input features
     Output
     ------
-        feat: (#nodes, out_feats)
+        h: (#nodes, out_feats), output features
     '''
 
     def __init__(self, in_feats, out_feats):
@@ -34,10 +28,13 @@ class RecGCNBlock(nn.Module):
         self.gcn_layer = GraphConv(in_feats, out_feats)
         self.gru_cell = nn.GRUCell(out_feats, out_feats)
 
-    def forward(self, graph, feat):
-        feat = self.gcn_layer(graph, feat)
-        feat = self.gru_cell(feat)
-        return F.relu(feat)
+    def forward(self, graph, h, first_cell=False):
+        x = self.gcn_layer(graph, h)
+        if first_cell:
+            h = self.gru_cell(x)
+        else:
+            h = self.gru_cell(x, h)
+        return F.elu(h)
 
 
 class RecGCN(nn.Module):
@@ -47,30 +44,34 @@ class RecGCN(nn.Module):
     ----------
         in_feats: int, the number of features in the inputs
         out_feats: int, the number of features in the outputs
-        num_blocks: int, default 4
+        num_blocks: int, the number of blocks
     Input
     -----
         graph: dgl.DGLGraph
-        feat: (#nodes, in_feats), features of nodes
+        h: (#nodes, in_feats), features of nodes
     Output
     ------
-        feat: (#nodes, out_feats), output features
+        h: (#nodes, out_feats), output features
     '''
 
-    def __init__(self, in_feats, out_feats, num_blocks=4):
+    def __init__(self, in_feats, out_feats, num_blocks):
         super().__init__()
-        self.blocks = nn.ModuleList(
-            [RecGCNBlock(in_feats, in_feats) for _ in range(num_blocks - 1)])
-        self.blocks.append(RecGCNBlock(in_feats, out_feats))
+        self.blocks = nn.ModuleList([RecGCNblock(in_feats, out_feats)])
+        self.blocks.extend(
+            [RecGCNblock(out_feats, out_feats) for _ in range(num_blocks - 1)]
+        )
 
-    def forward(self, graph, feat):
-        for block in self.blocks:
-            feat = block(graph, feat)
-        return feat
+    def forward(self, graph, h):
+        h = self.blocks[0](graph, h, first_cell=True)
+        for block in self.blocks[1:]:
+            h = block(graph, h)
+        return h
 
 
 class SemanticAttention(nn.Module):
-    '''semantic attention for HAN'''
+    '''semantic attention for HAN.
+    from https://github.com/dmlc/dgl/tree/master/examples/pytorch/han
+    '''
 
     def __init__(self, in_size, hidden_size=64):
         super().__init__()
@@ -88,7 +89,7 @@ class SemanticAttention(nn.Module):
 
 class HANLayer(nn.Module):
     """HAN layer.
-    from https://github.com/dmlc/dgl/tree/master/examples/pytorch/han 
+    from https://github.com/dmlc/dgl/tree/master/examples/pytorch/han
 
     Arguments
     ---------
@@ -165,29 +166,29 @@ class HAN(nn.Module):
 
 
 class SRG(nn.Module):
-    '''Social Recommendation model based on GCN-GRU(SRG).
+    '''Social Recommendation model based on Recurrent GCNs.
 
     Parameter
     ---------
-        rgcn_in_feats: int, input features size for RecGCN
-        rgcn_out_feats: int, output features size for RecGCN
-        rgcn_num_blocks: int
-        han_num_meta_path: int
-        han_in_feats: int
-        han_hidden_feats: int
-        han_head_list: List[int]
-        han_dropout: int
+        rgcn_in_feats: int, input features size for Recurrent GCNs
+        rgcn_out_feats: int, output features size for Recurrent GCNs
+        rgcn_num_blocks: int, the number of blocks for Recurrent GCNs
+        han_num_meta_path: int, the number of meta-path for HAN
+        han_in_feats: int, input features size for HAN
+        han_hidden_feats: int, hidden features size for HAN
+        han_head_list: List[int], the number of heads for each layer
+        han_dropout: int, drop out ratio
         fc_hidden_feats: int, hidden feature size for fully connected layer
     Input
     -----
-        g_homo: dgl.DGLGraph, for RecGCN
+        g_homo: dgl.DGLGraph, for Recurrent GCNs
         feat1: (#nodes, rgcn_in_feats), features of user nodes
         g_list: List[dgl.DGLGraph]
         feat2: (#nodes, han_in_feats), , features of user/item nodes
         pairs: [[user_id, item_id],...]
     Output
     ------
-        score
+        ratings
     '''
 
     def __init__(self,
@@ -224,3 +225,187 @@ class SRG(nn.Module):
             user_item_feat[pairs[:, 1]]
         ), dim=1)
         return self.fc(feat)
+
+
+class SRG_no_GRU(nn.Module):
+    '''SRG without GRU.
+
+    Parameter
+    ---------
+        gcn_in_feats: int, input features size for GCN
+        gcn_out_feats: int, output features size for GCN
+        gcn_num_layers: int, the number of blocks for GCN
+        han_num_meta_path: int, the number of meta-path for HAN
+        han_in_feats: int, input features size for HAN
+        han_hidden_feats: int, hidden features size for HAN
+        han_head_list: List[int], the number of heads for each layer
+        han_dropout: int, drop out ratio
+        fc_hidden_feats: int, hidden feature size for fully connected layer
+    Input
+    -----
+        g_homo: dgl.DGLGraph, for GCN
+        feat1: (#nodes, gcn_in_feats), features of user nodes
+        g_list: List[dgl.DGLGraph]
+        feat2: (#nodes, han_in_feats), , features of user/item nodes
+        pairs: [[user_id, item_id],...]
+    Output
+    ------
+        ratings
+    '''
+
+    def __init__(self,
+                 gcn_in_feats,
+                 gcn_out_feats,
+                 gcn_num_layers,
+                 han_num_meta_path,
+                 han_in_feats,
+                 han_hidden_feats,
+                 han_head_list,
+                 han_dropout,
+                 fc_hidden_feats
+                 ):
+        super().__init__()
+        self.gcns = nn.ModuleList(
+            [GraphConv(gcn_in_feats, gcn_out_feats, activation=F.relu)])
+        self.gcns.extend(
+            [GraphConv(gcn_out_feats, gcn_out_feats, activation=F.relu)
+             for _ in range(gcn_num_layers - 1)]
+        )
+        self.han = HAN(num_meta_paths=han_num_meta_path,
+                       in_feats=han_in_feats,
+                       hidden_feats=han_hidden_feats,
+                       head_list=han_head_list,
+                       dropout=han_dropout)
+        self.fc = nn.Sequential(
+            nn.Linear(gcn_out_feats + han_hidden_feats *
+                      han_head_list[-1] * 2, fc_hidden_feats),
+            nn.Linear(fc_hidden_feats, 1)
+        )
+
+    def forward(self, g_homo, feat1, g_list, feat2, pairs):
+        for gcn in self.gcns:
+            feat1 = gcn(g_homo, feat1)
+        feat2 = self.han(g_list, feat2)
+        feat = t.cat((
+            feat1[pairs[:, 0]],
+            feat2[pairs[:, 0]],
+            feat2[pairs[:, 1]]
+        ), dim=1)
+        return self.fc(feat)
+
+
+class SRG_Res(nn.Module):
+    '''SRG without GRU, but residual.
+
+    Parameter
+    ---------
+        gcn_in_feats: int, input features size for GCN
+        gcn_out_feats: int, output features size for GCN
+        gcn_num_layers: int, the number of blocks for GCN
+        han_num_meta_path: int, the number of meta-path for HAN
+        han_in_feats: int, input features size for HAN
+        han_hidden_feats: int, hidden features size for HAN
+        han_head_list: List[int], the number of heads for each layer
+        han_dropout: int, drop out ratio
+        fc_hidden_feats: int, hidden feature size for fully connected layer
+    Input
+    -----
+        g_homo: dgl.DGLGraph, for GCN
+        feat1: (#nodes, gcn_in_feats), features of user nodes
+        g_list: List[dgl.DGLGraph]
+        feat2: (#nodes, han_in_feats), , features of user/item nodes
+        pairs: [[user_id, item_id],...]
+    Output
+    ------
+        ratings
+    '''
+
+    def __init__(self,
+                 gcn_in_feats,
+                 gcn_out_feats,
+                 gcn_num_layers,
+                 han_num_meta_path,
+                 han_in_feats,
+                 han_hidden_feats,
+                 han_head_list,
+                 han_dropout,
+                 fc_hidden_feats
+                 ):
+        super().__init__()
+        self.gcns = nn.ModuleList(
+            [GraphConv(gcn_in_feats, gcn_out_feats, activation=F.relu)])
+        self.gcns.extend(
+            [GraphConv(gcn_out_feats, gcn_out_feats, activation=F.relu)
+             for _ in range(gcn_num_layers - 1)]
+        )
+        self.han = HAN(num_meta_paths=han_num_meta_path,
+                       in_feats=han_in_feats,
+                       hidden_feats=han_hidden_feats,
+                       head_list=han_head_list,
+                       dropout=han_dropout)
+        self.fc = nn.Sequential(
+            nn.Linear(gcn_out_feats + han_hidden_feats *
+                      han_head_list[-1] * 2, fc_hidden_feats),
+            nn.Linear(fc_hidden_feats, 1)
+        )
+
+    def forward(self, g_homo, feat1, g_list, feat2, pairs):
+        feat1 = self.gcns[0](g_homo, feat1)
+        for gcn in self.gcns[1:]:
+            feat1 = gcn(g_homo, feat1) + feat1
+        feat2 = self.han(g_list, feat2)
+        feat = t.cat((
+            feat1[pairs[:, 0]],
+            feat2[pairs[:, 0]],
+            feat2[pairs[:, 1]]
+        ), dim=1)
+        return self.fc(feat)
+
+
+class SRG_no_GCN(nn.Module):
+    '''SRG without recurrent GCNs.
+
+    Parameter
+    ---------
+        han_num_meta_path: int, the number of meta-path for HAN
+        han_in_feats: int, input features size for HAN
+        han_hidden_feats: int, hidden features size for HAN
+        han_head_list: List[int], the number of heads for each layer
+        han_dropout: int, drop out ratio
+        fc_hidden_feats: int, hidden feature size for fully connected layer
+    Input
+    -----
+        g_homo: placeholder
+        feat1: placeholder
+        g_list: List[dgl.DGLGraph]
+        feat2: (#nodes, han_in_feats), , features of user/item nodes
+        pairs: [[user_id, item_id],...]
+    Output
+    ------
+        ratings
+    '''
+
+    def __init__(self,
+                 han_num_meta_path,
+                 han_in_feats,
+                 han_hidden_feats,
+                 han_head_list,
+                 han_dropout,
+                 fc_hidden_feats
+                 ):
+        super().__init__()
+        self.han = HAN(num_meta_paths=han_num_meta_path,
+                       in_feats=han_in_feats,
+                       hidden_feats=han_hidden_feats,
+                       head_list=han_head_list,
+                       dropout=han_dropout)
+        self.fc = nn.Sequential(
+            nn.Linear(han_hidden_feats*han_head_list[-1] * 2, fc_hidden_feats),
+            nn.ELU(),
+            nn.Linear(fc_hidden_feats, 1)
+        )
+
+    def forward(self, g_homo, feat1, g_list, feat2, pairs):
+        feat2 = self.han(g_list, feat2)
+        feat2 = t.cat((feat2[pairs[:, 0]], feat2[pairs[:, 1]]), dim=1)
+        return self.fc(feat2)
