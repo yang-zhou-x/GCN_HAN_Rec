@@ -1,4 +1,4 @@
 # SRG
-**S**ocial **R**ecommendation model based on Recurrent **G**CN and HAN
+**S**ocial **R**ecommendation model based on Recurrent **G**CNs
 
 first version
