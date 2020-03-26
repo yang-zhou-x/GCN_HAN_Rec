@@ -30,45 +30,74 @@ def main(args):
                     args['in_feats']).to(args['device'])
     feat2 = t.randn(g_list[0].number_of_nodes(),
                     args['in_feats']).to(args['device'])
-
     labels = labels.view(-1, 1).to(dtype=t.float32)
 
     # model
-    model = m.SRG(rgcn_in_feats=args['in_feats'],
-                  rgcn_out_feats=args['embedding_size'],
-                  rgcn_num_blocks=args['num_b'],
-                  han_num_meta_path=args['num_meta_path'],
-                  han_in_feats=args['in_feats'],
-                  han_hidden_feats=args['embedding_size'],
-                  han_head_list=args['head_list'],
-                  han_dropout=args['drop_out'],
-                  fc_hidden_feats=args['fc_units']
-                  ).to(args['device'])
-
-    loss_func = nn.MSELoss()
-    optimizer = t.optim.Adam(
-        model.parameters(), lr=args['lr'], weight_decay=args['decay'])
+    if args['model'] == 'SRG':
+        model = m.SRG(rgcn_in_feats=args['in_feats'],
+                      rgcn_out_feats=args['embedding_size'],
+                      rgcn_num_blocks=args['num_b'],
+                      han_num_meta_path=args['num_meta_path'],
+                      han_in_feats=args['in_feats'],
+                      han_hidden_feats=args['embedding_size'],
+                      han_head_list=args['head_list'],
+                      han_dropout=args['drop_out'],
+                      fc_hidden_feats=args['fc_units']
+                      ).to(args['device'])
+    elif args['model'] == 'SRG_no_GRU':
+        model = m.SRG_no_GRU(gcn_in_feats=args['in_feats'],
+                             gcn_out_feats=args['embedding_size'],
+                             gcn_num_layers=args['num_l'],
+                             han_num_meta_path=args['num_meta_path'],
+                             han_in_feats=args['in_feats'],
+                             han_hidden_feats=args['embedding_size'],
+                             han_head_list=args['head_list'],
+                             han_dropout=args['drop_out'],
+                             fc_hidden_feats=args['fc_units'])
+    elif args['model'] == 'SRG_Res':
+        model = m.SRG_Res(gcn_in_feats=args['in_feats'],
+                          gcn_out_feats=args['embedding_size'],
+                          gcn_num_layers=args['num_l'],
+                          han_num_meta_path=args['num_meta_path'],
+                          han_in_feats=args['in_feats'],
+                          han_hidden_feats=args['embedding_size'],
+                          han_head_list=args['head_list'],
+                          han_dropout=args['drop_out'],
+                          fc_hidden_feats=args['fc_units'])
+    elif args['model'] == 'SRG_no_GCN':
+        model = m.SRG_no_GCN(han_num_meta_path=args['num_meta_path'],
+                             han_in_feats=args['in_feats'],
+                             han_hidden_feats=args['embedding_size'],
+                             han_head_list=args['head_list'],
+                             han_dropout=args['drop_out'],
+                             fc_hidden_feats=args['fc_units'])
+    else:
+        raise ValueError('wrong name of the model')
 
     dt = datetime.now()
     model_path = args['name'] + \
-        f'_EarlyStopping_{dt.date()}_{dt.hour}-{dt.minute}-{dt.second}.pth'
+        f'_{dt.date()}_{dt.hour}-{dt.minute}-{dt.second}.pth'
     model_path = os.path.join(os.getcwd(), 'saved_models', model_path)
-    early_stop = u.EarlyStopping(model_path, patience=args['patience'])
 
-    # train
-    log_path = args['name'] + \
-        f'_train_{dt.date()}_{dt.hour}-{dt.minute}-{dt.second}'
+    # log
+    log_path = args['name'] + f'_{dt.date()}_{dt.hour}-{dt.minute}-{dt.second}'
     log_path = os.path.join(os.getcwd(), 'log', log_path)
     log = [str(args) + '\n']
     log.append('epoch train_MAE train_RMSE test_MAE test_RMSE elapse\n')
 
+    # train
+    loss_func = nn.MSELoss()
+    optimizer = t.optim.Adam(
+        model.parameters(), lr=args['lr'], weight_decay=args['decay'])
+    early_stop = u.EarlyStopping(model_path, patience=args['patience'])
+
     for epoch in range(args['epochs']):
         dt = datetime.now()
         model.train()
-        y_pred = model(g_homo, feat1, g_list, feat2, pairs)
-        loss = loss_func(y_pred[train_mask], labels[train_mask])
 
         optimizer.zero_grad()
+        y_pred = model(g_homo, feat1, g_list, feat2, pairs)
+        loss = loss_func(y_pred[train_mask], labels[train_mask])
         loss.backward()
         optimizer.step()
 
@@ -78,7 +107,7 @@ def main(args):
             y_pred[test_mask].detach(), labels[test_mask])
         stop = early_stop.step(test_rmse, model)
 
-        elapse = str(datetime.now() - dt)[:9] + '\n'
+        elapse = str(datetime.now() - dt)[:10] + '\n'
         log.append(' '.join(str(x) for x in (epoch, train_mae,
                                              train_rmse, test_mae, test_rmse, elapse)))
         print(
@@ -87,7 +116,7 @@ def main(args):
         if stop:
             break
 
-    # log
+    # save log
     with open(log_path, 'w') as f:
         f.writelines(log)
 
@@ -103,31 +132,37 @@ if __name__ == '__main__':
     parser.add_argument('-es', '--embedding_size', type=int,
                         default=64, help='embedding size of user/item')
     parser.add_argument('-ifs', '--in_feats', type=int,
-                        default=64, help='input feature size')
+                        default=128, help='input feature size')
     parser.add_argument('-nb', '--num_b', type=int,
-                        default=4, help='the number of GCN-GRU blocks')
+                        default=4, help='the number of RecGCN blocks')
     parser.add_argument('-do', '--drop_out', type=float,
-                        default=0.5, help='drop out rate')
+                        default=0.5, help='drop out ratio')
     parser.add_argument('-e', '--epochs', type=int,
                         default=300, help='the number of epochs')
+    parser.add_argument('-m', '--model', type=str,
+                        default='SRG', help='SRG, SRG_no_GRU, SRG_no_GCN or SRG_Res')
+    parser.add_argument('-nl', '--num_l', type=int,
+                        default=4, help='the number of GCN layers for SRG_no_GRU/SRG_Res')
     command_line_args = parser.parse_args().__dict__
 
     args = {
-        'lr': .005,  # learning rate
+        'lr': .005,  # learning ratio
         'decay': .001,  # weight decay
         'epochs': 300,
         'patience': 100,
         'device': 'cuda' if t.cuda.is_available() else 'cpu',
         'num_meta_path': 5,
-        'head_list': [16],
+        'head_list': [8],
         'fc_units': 32,
-        'name': 'ciao',
+        'name': 'ciao',  # dataset name, ciao or epinions
         'seed': 2020,
-        'train_size': .8,
-        'embedding_size': 128,
-        'in_feats': 128,
-        'num_b': 4,
-        'drop_out': .5
+        'train_size': .8,  # train set size
+        'embedding_size': 32,  # embedding size of user/item
+        'in_feats': 64,  # input feature size
+        'num_b': 4,  # the number of RecGCN blocks
+        'drop_out': .5,  # drop out ratio
+        'num_l': 4,  # tthe number of GCN layers for SRG_no_GRU/SRG_Res
+        'model': 'SRG'  # SRG, SRG_no_GRU, SRG_no_GCN or SRG_Res
     }
     args.update(command_line_args)
 
