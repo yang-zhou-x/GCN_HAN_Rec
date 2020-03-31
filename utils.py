@@ -12,7 +12,6 @@ import pandas as pd
 import torch as t
 import numpy as np
 from dgl import DGLGraph
-from datetime import datetime
 
 
 def get_binary_mask(size, train_indices):
@@ -159,6 +158,9 @@ def mean_absolute_error(y_pred, y_true):
     ---------
         y_pred: np.array
         y_ture: np.array
+    Return
+    ------
+        MAE: float
     '''
     if y_pred.shape == y_true.shape:
         return np.sum(np.abs(y_pred - y_true)) / y_pred.shape[0]
@@ -173,6 +175,9 @@ def root_mean_squared_error(y_pred, y_true):
     ---------
         y_pred: np.array
         y_ture: np.array
+    Return
+    ------
+        RMSE: float
     '''
     if y_pred.shape == y_true.shape:
         return np.sqrt(np.sum(np.square(y_pred - y_true)) / y_pred.shape[0])
@@ -190,8 +195,8 @@ def metrics(y_pred, y_true, decimal=4):
         decimal: int, decimal places
     Returns
     -------
-        mae: mean absolute error
-        rmse: root mean squared error
+        mae: float, mean absolute error
+        rmse: float, root mean squared error
     '''
     y_pred = y_pred.cpu().numpy()
     y_true = y_true.cpu().numpy()
@@ -200,33 +205,60 @@ def metrics(y_pred, y_true, decimal=4):
     return round(mae, decimal), round(rmse, decimal)
 
 
+def evaluate(model, g_homo, feat1, g_list, feat2, pairs, labels, mask):
+    '''model evaluation.
+
+    Parameter
+    ---------
+        model: torch model
+        g_homo: dgl.DGLGraph, for Recurrent GCNs
+        feat1: (#nodes, rgcn_in_feats), features of user nodes
+        g_list: List[dgl.DGLGraph]
+        feat2: (#nodes, han_in_feats), , features of user/item nodes
+        pairs: [[user_id, item_id],...]
+        labels: tensor, w/o gradient
+        mask: tensor, w/o gradient
+    Return
+    ------
+        mae, float
+        rmse, float
+    '''
+    model.eval()
+    with t.no_grad():
+        y_pred = model(g_homo, feat1, g_list, feat2, pairs)
+    mae, rmse = metrics(y_pred[mask].detach(), labels[mask])
+    return mae, rmse
+
+
 class EarlyStopping:
-    def __init__(self, file_path, patience=10):
+    def __init__(self, file_path, patience=30, rmse=None, mae=None):
         self.file_path = file_path
         self.patience = patience
         self.counter = 0
-        self.best_loss = None
+        self.min_rmse = rmse
+        self.min_mae = mae
         self.early_stop = False
 
-    def step(self, loss, model):
-        if self.best_loss is None:
-            self.best_loss = loss
+    def step(self, rmse, mae, model):
+        if self.min_rmse is None:
+            self.min_rmse = rmse
+            self.min_mae = mae
             self.save_checkpoint(model)
-        elif loss >= self.best_loss:
+        elif rmse >= self.min_rmse and mae >= self.min_mae:
             self.counter += 1
-            print(f'EarlyStopping counter: {self.counter} / {self.patience}.')
-            if self.counter >= self.patience:
+            print(f'Early Stopping Counter: {self.counter} / {self.patience}.')
+            if self.counter == self.patience:
                 self.early_stop = True
         else:
-            self.save_checkpoint(model)
-            self.best_loss = loss
+            if rmse <= self.min_rmse and mae <= self.min_mae:
+                self.save_checkpoint(model)
+            self.min_rmse = min(self.min_rmse, rmse)
+            self.min_mae = min(self.min_mae, mae)
             self.counter = 0
         return self.early_stop
 
     def save_checkpoint(self, model):
-        '''saving the model when validation loss decreases.'''
         t.save(model.state_dict(), self.file_path)
 
     def load_checkpoint(self, model):
-        '''loading the latest checkpoint.'''
         model.load_state_dict(t.load(self.file_path))
