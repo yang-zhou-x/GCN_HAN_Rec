@@ -6,6 +6,11 @@
 @Contact : yzhou.x@icloud.com
 '''
 
+import torch as t
+from torch import nn
+import torch.nn.functional as F
+from dgl.nn.pytorch import GraphConv, GATConv
+
 
 class RecGCNblock(nn.Module):
     '''Recurrent GCN block with GRU.
@@ -42,9 +47,10 @@ class RecGCN(nn.Module):
 
     Parameter
     ----------
-        in_feats: int, the number of features in the inputs
-        out_feats: int, the number of features in the outputs
-        num_blocks: int, the number of blocks
+        in_feats: int, # of features in the inputs
+        out_feats: int, # of features in the outputs
+        num_blocks: int, # of blocks
+        dropout: float, dropout rate for input features in each block
     Input
     -----
         graph: dgl.DGLGraph
@@ -54,11 +60,83 @@ class RecGCN(nn.Module):
         h: (#nodes, out_feats), output features
     '''
 
-    def __init__(self, in_feats, out_feats, num_blocks):
+    def __init__(self, in_feats, out_feats, num_blocks, dropout):
         super().__init__()
         self.blocks = nn.ModuleList([RecGCNblock(in_feats, out_feats)])
         self.blocks.extend(
             [RecGCNblock(out_feats, out_feats) for _ in range(num_blocks - 1)]
+        )
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, graph, h):
+        h = self.dropout(h)
+        h = self.blocks[0](graph, h, first_cell=True)
+        for block in self.blocks[1:]:
+            h = self.dropout(h)
+            h = block(graph, h)
+        return h
+
+
+class RecGATblock(nn.Module):
+    '''Recurrent GAT block with GRU.
+
+    Parameter
+    ---------
+        in_feats: int, input feature size
+        out_feats: int, output feature size
+        num_heads: int, # of attention head
+        dropout: float, dropout rate for GAT layer
+    Input
+    -----
+        graph: dgl.DGLGraph
+        h: (#nodes, in_feats), input features
+    Output
+    ------
+        h: (#nodes, out_feats), output features
+    '''
+
+    def __init__(self, in_feats, out_feats, num_heads=8, dropout=0.):
+        super().__init__()
+        self.gat_layer = GATConv(
+            in_feats, out_feats, num_heads, dropout, dropout)
+        self.gru_cell = nn.GRUCell(out_feats * num_heads, out_feats)
+
+    def forward(self, graph, h, first_cell=False):
+        x = self.gat_layer(graph, h)
+        x = x.view(h.size()[0], -1)
+        if first_cell:
+            h = self.gru_cell(x)
+        else:
+            h = self.gru_cell(x, h)
+        return F.elu(h)
+
+
+class RecGAT(nn.Module):
+    '''Recurrent GAT with GRU.
+
+    Parameter
+    ----------
+        in_feats: int, the number of features in the inputs
+        out_feats: int, the number of features in the outputs
+        num_blocks: int, the number of blocks
+        dropout: float, dropout rate for GAT layer
+    Input
+    -----
+        graph: dgl.DGLGraph
+        h: (#nodes, in_feats), features of nodes
+    Output
+    ------
+        h: (#nodes, out_feats), output features
+    '''
+
+    def __init__(self, in_feats, out_feats, num_blocks, dropout):
+        super().__init__()
+        self.blocks = nn.ModuleList(
+            [RecGATblock(in_feats, out_feats, dropout=dropout)]
+        )
+        self.blocks.extend(
+            [RecGATblock(out_feats, out_feats, dropout=dropout)
+             for _ in range(num_blocks - 1)]
         )
 
     def forward(self, graph, h):
@@ -172,12 +250,13 @@ class SRG(nn.Module):
     ---------
         rgcn_in_feats: int, input features size for Recurrent GCNs
         rgcn_out_feats: int, output features size for Recurrent GCNs
-        rgcn_num_blocks: int, the number of blocks for Recurrent GCNs
-        han_num_meta_path: int, the number of meta-path for HAN
+        rgcn_num_blocks: int, # of blocks for Recurrent GCNs
+        rgcn_dropout: float, dropout rate for input features in each block
+        han_num_meta_path: int, # of meta-path for HAN
         han_in_feats: int, input features size for HAN
         han_hidden_feats: int, hidden features size for HAN
-        han_head_list: List[int], the number of heads for each layer
-        han_dropout: int, drop out ratio
+        han_head_list: List[int], # of heads for each HAN layer
+        han_dropout: float, dropout rate for GAT layer in HAN
         fc_hidden_feats: int, hidden feature size for fully connected layer
     Input
     -----
@@ -188,13 +267,14 @@ class SRG(nn.Module):
         pairs: [[user_id, item_id],...]
     Output
     ------
-        ratings
+        ratings, tensor with gradient
     '''
 
     def __init__(self,
                  rgcn_in_feats,
                  rgcn_out_feats,
                  rgcn_num_blocks,
+                 rgcn_dropout,
                  han_num_meta_path,
                  han_in_feats,
                  han_hidden_feats,
@@ -204,7 +284,7 @@ class SRG(nn.Module):
                  ):
         super().__init__()
         self.recurrent_gcn = RecGCN(
-            rgcn_in_feats, rgcn_out_feats, rgcn_num_blocks)
+            rgcn_in_feats, rgcn_out_feats, rgcn_num_blocks, rgcn_dropout)
         self.han = HAN(num_meta_paths=han_num_meta_path,
                        in_feats=han_in_feats,
                        hidden_feats=han_hidden_feats,
@@ -213,11 +293,77 @@ class SRG(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(rgcn_out_feats + han_hidden_feats *
                       han_head_list[-1] * 2, fc_hidden_feats),
+            nn.ELU(),
             nn.Linear(fc_hidden_feats, 1)
         )
 
     def forward(self, g_homo, feat1, g_list, feat2, pairs):
         user_feat = self.recurrent_gcn(g_homo, feat1)
+        user_item_feat = self.han(g_list, feat2)
+        feat = t.cat((
+            user_feat[pairs[:, 0]],
+            user_item_feat[pairs[:, 0]],
+            user_item_feat[pairs[:, 1]]
+        ), dim=1)
+        return self.fc(feat)
+
+
+class SRG_GAT(nn.Module):
+    '''Social Recommendation model based on Recurrent GCNs.
+
+    Parameter
+    ---------
+        rgcn_in_feats: int, input features size for Recurrent GCNs
+        rgcn_out_feats: int, output features size for Recurrent GCNs
+        rgcn_num_blocks: int, # of blocks for Recurrent GCNs
+        rgcn_dropout: float, dropout rate for GAT layer
+        han_num_meta_path: int, # of meta-path for HAN
+        han_in_feats: int, input features size for HAN
+        han_hidden_feats: int, hidden features size for HAN
+        han_head_list: List[int], # of heads for each HAN layer
+        han_dropout: float, dropout rate for GAT layer in HAN
+        fc_hidden_feats: int, hidden feature size for fully connected layer
+    Input
+    -----
+        g_homo: dgl.DGLGraph, for Recurrent GCNs
+        feat1: (#nodes, rgcn_in_feats), features of user nodes
+        g_list: List[dgl.DGLGraph]
+        feat2: (#nodes, han_in_feats), , features of user/item nodes
+        pairs: [[user_id, item_id],...]
+    Output
+    ------
+        ratings, tensor with gradient
+    '''
+
+    def __init__(self,
+                 rgcn_in_feats,
+                 rgcn_out_feats,
+                 rgcn_num_blocks,
+                 rgcn_dropout,
+                 han_num_meta_path,
+                 han_in_feats,
+                 han_hidden_feats,
+                 han_head_list,
+                 han_dropout,
+                 fc_hidden_feats
+                 ):
+        super().__init__()
+        self.recurrent_gat = RecGAT(
+            rgcn_in_feats, rgcn_out_feats, rgcn_num_blocks, rgcn_dropout)
+        self.han = HAN(num_meta_paths=han_num_meta_path,
+                       in_feats=han_in_feats,
+                       hidden_feats=han_hidden_feats,
+                       head_list=han_head_list,
+                       dropout=han_dropout)
+        self.fc = nn.Sequential(
+            nn.Linear(rgcn_out_feats + han_hidden_feats *
+                      han_head_list[-1] * 2, fc_hidden_feats),
+            nn.ELU(),
+            nn.Linear(fc_hidden_feats, 1)
+        )
+
+    def forward(self, g_homo, feat1, g_list, feat2, pairs):
+        user_feat = self.recurrent_gat(g_homo, feat1)
         user_item_feat = self.han(g_list, feat2)
         feat = t.cat((
             user_feat[pairs[:, 0]],
@@ -239,7 +385,7 @@ class SRG_no_GRU(nn.Module):
         han_in_feats: int, input features size for HAN
         han_hidden_feats: int, hidden features size for HAN
         han_head_list: List[int], the number of heads for each layer
-        han_dropout: int, drop out ratio
+        han_dropout: int, drop out rate
         fc_hidden_feats: int, hidden feature size for fully connected layer
     Input
     -----
@@ -250,7 +396,7 @@ class SRG_no_GRU(nn.Module):
         pairs: [[user_id, item_id],...]
     Output
     ------
-        ratings
+        ratings, tensor with gradient
     '''
 
     def __init__(self,
@@ -279,6 +425,7 @@ class SRG_no_GRU(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(gcn_out_feats + han_hidden_feats *
                       han_head_list[-1] * 2, fc_hidden_feats),
+            nn.ELU(),
             nn.Linear(fc_hidden_feats, 1)
         )
 
@@ -306,7 +453,7 @@ class SRG_Res(nn.Module):
         han_in_feats: int, input features size for HAN
         han_hidden_feats: int, hidden features size for HAN
         han_head_list: List[int], the number of heads for each layer
-        han_dropout: int, drop out ratio
+        han_dropout: int, drop out rate
         fc_hidden_feats: int, hidden feature size for fully connected layer
     Input
     -----
@@ -317,7 +464,7 @@ class SRG_Res(nn.Module):
         pairs: [[user_id, item_id],...]
     Output
     ------
-        ratings
+        ratings, tensor with gradient
     '''
 
     def __init__(self,
@@ -346,6 +493,7 @@ class SRG_Res(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(gcn_out_feats + han_hidden_feats *
                       han_head_list[-1] * 2, fc_hidden_feats),
+            nn.ELU(),
             nn.Linear(fc_hidden_feats, 1)
         )
 
@@ -371,7 +519,7 @@ class SRG_no_GCN(nn.Module):
         han_in_feats: int, input features size for HAN
         han_hidden_feats: int, hidden features size for HAN
         han_head_list: List[int], the number of heads for each layer
-        han_dropout: int, drop out ratio
+        han_dropout: int, drop out rate
         fc_hidden_feats: int, hidden feature size for fully connected layer
     Input
     -----
@@ -382,7 +530,7 @@ class SRG_no_GCN(nn.Module):
         pairs: [[user_id, item_id],...]
     Output
     ------
-        ratings
+        ratings, tensor with gradient
     '''
 
     def __init__(self,
