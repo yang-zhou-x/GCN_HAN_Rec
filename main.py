@@ -128,8 +128,7 @@ def main(args):
         elapse = str(datetime.now() - dt)[:10] + '\n'
         log.append(' '.join(str(x) for x in (epoch, train_mae,
                                              train_rmse, test_mae, test_rmse, elapse)))
-        print(
-            f'epoch={epoch} | train_MAE={train_mae} | train_RMSE={train_rmse} | test_MAE={test_mae} | test_RMSE={test_rmse} | elapse={elapse}')
+        print(f'epoch={epoch} | train_MAE={train_mae} | train_RMSE={train_rmse} | test_MAE={test_mae} | test_RMSE={test_rmse} | elapse={elapse}')
 
         if stop:
             break
