@@ -235,25 +235,25 @@ class EarlyStopping:
         self.file_path = file_path
         self.patience = patience
         self.counter = 0
-        self.min_rmse = rmse
-        self.min_mae = mae
+        self.curr_rmse = rmse
+        self.curr_mae = mae
         self.early_stop = False
 
     def step(self, rmse, mae, model):
-        if self.min_rmse is None:
-            self.min_rmse = rmse
-            self.min_mae = mae
+        if self.curr_rmse is None:
+            self.curr_rmse = rmse
+            self.curr_mae = mae
             self.save_checkpoint(model)
-        elif rmse >= self.min_rmse and mae >= self.min_mae:
+        elif rmse >= self.curr_rmse and mae >= self.curr_mae:
             self.counter += 1
             print(f'Early Stopping Counter: {self.counter} / {self.patience}.')
             if self.counter == self.patience:
                 self.early_stop = True
         else:
-            if rmse <= self.min_rmse and mae <= self.min_mae:
+            if rmse <= self.curr_rmse and mae <= self.curr_mae:
                 self.save_checkpoint(model)
-            self.min_rmse = min(self.min_rmse, rmse)
-            self.min_mae = min(self.min_mae, mae)
+                self.curr_rmse = rmse
+                self.curr_mae = mae
             self.counter = 0
         return self.early_stop
 
