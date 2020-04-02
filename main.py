@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
 @File    : main.py
-@Time    : 2020
+@Time    : 2020/02
 @Author  : ZHOU, YANG
 @Contact : yzhou.x@icloud.com
 '''
@@ -17,13 +17,14 @@ import random
 
 def main(args):
     # load dataset
-    g_homo, g_list, pairs, labels, train_mask, test_mask = u.load_data(
+    g_homo, g_list, pairs, labels, train_mask, val_mask, test_mask = u.load_data(
         args['name'], args['train_size'])
 
     # transfer
     pairs = t.from_numpy(pairs).to(args['device'])
     labels = t.from_numpy(labels).to(args['device'])
     train_mask = t.from_numpy(train_mask).to(args['device'])
+    val_mask = t.from_numpy(val_mask).to(args['device'])
     test_mask = t.from_numpy(test_mask).to(args['device'])
     feat1 = t.randn(g_homo.number_of_nodes(),
                     args['in_feats']).to(args['device'])
@@ -121,14 +122,14 @@ def main(args):
 
         train_mae, train_rmse = u.metrics(
             y_pred[train_mask].detach(), labels[train_mask])
-        test_mae, test_rmse = u.evaluate(
-            model, g_homo, feat1, g_list, feat2, pairs, labels, test_mask)
-        stop = early_stop.step(test_rmse, test_mae, model)
+        val_mae, val_rmse = u.evaluate(
+            model, g_homo, feat1, g_list, feat2, pairs, labels, val_mask)
+        stop = early_stop.step(val_rmse, val_mae, model)
 
         elapse = str(datetime.now() - dt)[:10] + '\n'
         log.append(' '.join(str(x) for x in (epoch, train_mae,
-                                             train_rmse, test_mae, test_rmse, elapse)))
-        print(f'epoch={epoch} | train_MAE={train_mae} | train_RMSE={train_rmse} | test_MAE={test_mae} | test_RMSE={test_rmse} | elapse={elapse}')
+                                             train_rmse, val_mae, val_rmse, elapse)))
+        print(f'epoch={epoch} | train_MAE={train_mae} | train_RMSE={train_rmse} | val_MAE={val_mae} | val_RMSE={val_rmse} | elapse={elapse}')
 
         if stop:
             break
@@ -160,7 +161,7 @@ if __name__ == '__main__':
     parser.add_argument('-do', '--drop_out', type=float,
                         default=0.5, help='dropout rate')
     parser.add_argument('-e', '--epochs', type=int,
-                        default=800, help='# of epochs')
+                        default=1000, help='# of epochs')
     parser.add_argument('-m', '--model', type=str,
                         default='SRG', help='SRG, SRG_GAT, SRG_no_GRU, SRG_no_GCN or SRG_Res')
     parser.add_argument('-nl', '--num_l', type=int,
@@ -172,7 +173,7 @@ if __name__ == '__main__':
     args = {
         'lr': .005,  # learning rate
         'decay': .001,  # weight decay
-        'epochs': 800,
+        'epochs': 1000,
         'patience': 100,
         'device': 'cuda' if t.cuda.is_available() else 'cpu',
         'num_meta_path': 5,
@@ -186,7 +187,7 @@ if __name__ == '__main__':
         'num_b': 3,  # the number of RecGCN/RecGAT blocks
         'drop_out': .5,  # drop out rate
         'num_l': 2,  # tthe number of GCN layers for SRG_no_GRU/SRG_Res
-        'model': 'SRG_GAT'  # SRG, SRG_GAT, SRG_no_GRU, SRG_no_GCN or SRG_Res
+        'model': 'SRG'  # SRG, SRG_GAT, SRG_no_GRU, SRG_no_GCN or SRG_Res
     }
     args.update(command_line_args)
 
