@@ -13,18 +13,18 @@ from datetime import datetime
 import os
 import random
 import argparse
-import pandas as pd
 
 
 def retrain(args):
     # load dataset
-    g_homo, g_list, pairs, labels, train_mask, test_mask = u.load_data(
+    g_homo, g_list, pairs, labels, train_mask, val_mask, test_mask = u.load_data(
         args['name'], args['train_size'])
 
     # transfer
     pairs = t.from_numpy(pairs).to(args['device'])
     labels = t.from_numpy(labels).to(args['device'])
     train_mask = t.from_numpy(train_mask).to(args['device'])
+    val_mask = t.from_numpy(val_mask).to(args['device'])
     test_mask = t.from_numpy(test_mask).to(args['device'])
     feat1 = t.randn(g_homo.number_of_nodes(),
                     args['in_feats']).to(args['device'])
@@ -94,9 +94,8 @@ def retrain(args):
 
     # log
     log = []
-    df = pd.read_csv(args['log_path'], sep=' ', header=1,
-                     usecols=['test_MAE', 'test_RMSE'])
-    mae, rmse = df.min()
+    mae, rmse = u.evaluate(model, g_homo, feat1, g_list,
+                           feat2, pairs, labels, val_mask)
     model_path = args['model_path'][:-4] + '(2).pth'
     early_stop = u.EarlyStopping(
         model_path, patience=args['patience'], rmse=rmse, mae=mae)
@@ -119,17 +118,22 @@ def retrain(args):
 
         train_mae, train_rmse = u.metrics(
             y_pred[train_mask].detach(), labels[train_mask])
-        test_mae, test_rmse = u.evaluate(
-            model, g_homo, feat1, g_list, feat2, pairs, labels, test_mask)
-        stop = early_stop.step(test_rmse, test_mae, model)
+        val_mae, val_rmse = u.evaluate(
+            model, g_homo, feat1, g_list, feat2, pairs, labels, val_mask)
+        stop = early_stop.step(val_rmse, val_mae, model)
 
         elapse = str(datetime.now() - dt)[:10] + '\n'
         log.append(' '.join(str(x) for x in (epoch, train_mae,
-                                             train_rmse, test_mae, test_rmse, elapse)))
-        print(f'epoch={epoch} | train_MAE={train_mae} | train_RMSE={train_rmse} | test_MAE={test_mae} | test_RMSE={test_rmse} | elapse={elapse}')
+                                             train_rmse, val_mae, val_rmse, elapse)))
+        print(f'epoch={epoch} | train_MAE={train_mae} | train_RMSE={train_rmse} | val_MAE={val_mae} | val_RMSE={val_rmse} | elapse={elapse}')
 
         if stop:
             break
+
+    early_stop.load_checkpoint(model)
+    test_mae, test_rmse = u.evaluate(
+        model, g_homo, feat1, g_list, feat2, pairs, labels, test_mask)
+    print(f'test_MAE={test_mae} | test_RMSE={test_rmse}')
 
     # save log
     with open(args['log_path'], 'a') as f:
