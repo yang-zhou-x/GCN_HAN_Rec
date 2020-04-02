@@ -1,21 +1,22 @@
 # -*- coding: utf-8 -*-
 '''
 @File    : utils.py
-@Time    : 2020
+@Time    : 2020/02
 @Author  : ZHOU, YANG
 @Contact : yzhou.x@icloud.com
 '''
 
 import os
 import random
+import numpy as np
 import pandas as pd
 import torch as t
-import numpy as np
 from dgl import DGLGraph
 
 
 def get_binary_mask(size, train_indices):
-    '''get binary mask for train/test dataset.
+    '''get binary mask for train/val/test dataset.  
+    |val set|:|test set| == 1:1
 
     Parameter
     ---------
@@ -24,12 +25,27 @@ def get_binary_mask(size, train_indices):
     Return
     ------
         train_mask: np.array[bool]
+        val_mask: np.array[bool]
         test_mask: np.array[bool]
     '''
-    train_mask = np.zeros(size, dtype=np.int8)
-    train_mask[train_indices] = 1
-    test_mask = 1 - train_mask
-    return train_mask.astype(bool), test_mask.astype(bool)
+    train_mask = np.zeros(size, dtype=np.bool)
+    train_mask[train_indices] = True
+
+    val_test_size = size - len(train_indices)
+    val_size = int(val_test_size / 2)
+    test_size = val_test_size - val_size
+
+    val_test_mask = (1 - train_mask).astype(bool)
+    val_test_indices = np.arange(size)[val_test_mask].tolist()
+    val_indices = random.sample(val_test_indices, val_size)
+    test_indices = list(set(val_test_indices).difference(set(val_indices)))
+
+    val_mask = np.zeros(size, dtype=np.bool)
+    val_mask[val_indices] = True
+    test_mask = np.zeros(size, dtype=np.bool)
+    test_mask[test_indices] = True
+
+    return train_mask, val_mask, test_mask
 
 
 def _load_data_epinions(train_size):
@@ -62,7 +78,8 @@ def _load_data_epinions(train_size):
 
     train_size = int(rating.shape[0] * train_size)
     train_idx = random.sample(range(rating.shape[0]), train_size)
-    train_mask, test_mask = get_binary_mask(rating.shape[0], train_idx)
+    train_mask, val_mask, test_mask = get_binary_mask(
+        rating.shape[0], train_idx)
 
     g_list = []
     for i in range(1, 6):
@@ -77,7 +94,7 @@ def _load_data_epinions(train_size):
                             tmp_graph.nodes())  # add self-loop
         g_list.append(tmp_graph)
 
-    return g_homo, g_list, pairs, labels, train_mask, test_mask
+    return g_homo, g_list, pairs, labels, train_mask, val_mask, test_mask
 
 
 def _load_data_ciao(train_size):
@@ -109,7 +126,8 @@ def _load_data_ciao(train_size):
 
     train_size = int(rating.shape[0] * train_size)
     train_idx = random.sample(range(rating.shape[0]), train_size)
-    train_mask, test_mask = get_binary_mask(rating.shape[0], train_idx)
+    train_mask, val_mask, test_mask = get_binary_mask(
+        rating.shape[0], train_idx)
 
     g_list = []
     for i in range(1, 6):
@@ -124,7 +142,7 @@ def _load_data_ciao(train_size):
                             tmp_graph.nodes())  # add self-loop
         g_list.append(tmp_graph)
 
-    return g_homo, g_list, pairs, labels, train_mask, test_mask
+    return g_homo, g_list, pairs, labels, train_mask, val_mask, test_mask
 
 
 def load_data(name, train_size=0.8):
@@ -141,6 +159,7 @@ def load_data(name, train_size=0.8):
         pairs: np.array, user-item pairs
         labels: np.array, rating labels
         train_mask: np.array(bool)
+        val_mask: np.array(bool)
         test_mask: np.array(bool)
     '''
     if name == 'epinions':
