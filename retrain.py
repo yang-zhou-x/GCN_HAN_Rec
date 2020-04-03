@@ -96,9 +96,8 @@ def retrain(args):
     log = []
     mae, rmse = u.evaluate(model, g_homo, feat1, g_list,
                            feat2, pairs, labels, val_mask)
-    model_path = args['model_path'][:-4] + '(2).pth'
     early_stop = u.EarlyStopping(
-        model_path, patience=args['patience'], rmse=rmse, mae=mae)
+        args['model_path'], patience=args['patience'], rmse=rmse, mae=mae)
 
     # loss, optimizer
     loss_func = t.nn.MSELoss()
