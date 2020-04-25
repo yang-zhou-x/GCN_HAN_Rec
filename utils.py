@@ -50,14 +50,24 @@ def get_binary_mask(size, train_indices):
 
 def _load_data_epinions(train_size):
     '''loading dataset Epinions.'''
-    # social graph
+    # social relation data
     init_path = os.getcwd()
     trust_path = os.path.join(init_path, 'datasets/Epinions/trust_data.txt')
     trust = pd.read_csv(trust_path, sep=' ', header=None,
                         names=['1', 'source_user_id', 'target_user_id', 'trust_statement_value'])
     trust.drop(columns='1', inplace=True)
+
+    # user-item data
+    rating_path = os.path.join(
+        init_path, 'datasets/Epinions/ratings_data.txt')
+    rating = pd.read_csv(rating_path, sep=' ', header=None,
+                         names=['user_id', 'item_id', 'rating_value'])
+
+    # social graph
+    num_users = max(trust.iloc[:, 0].max(),
+                    trust.iloc[:, 1].max(), rating.iloc[:, 0].max())
     g_homo = DGLGraph()
-    g_homo.add_nodes(49289)  # 49289 users
+    g_homo.add_nodes(num_users)  # number of users
     edge_list = trust.iloc[:, :2].to_numpy()
     edge_list -= 1  # counting from 0
     src, dst = tuple(zip(*edge_list.tolist()))
@@ -66,12 +76,9 @@ def _load_data_epinions(train_size):
     g_homo.add_edges(g_homo.nodes(), g_homo.nodes())  # add self-loop
 
     # user-item graph
-    rating_path = os.path.join(
-        init_path, 'datasets/Epinions/ratings_data.txt')
-    rating = pd.read_csv(rating_path, sep=' ', header=None,
-                         names=['user_id', 'item_id', 'rating_value'])
+    num_items = rating.iloc[:, 1].max()  # number of items
     rating.iloc[:, :2] -= 1  # counting from 0
-    rating.iloc[:, 1] += 49289  # for item indices
+    rating.iloc[:, 1] += num_users  # for item indices
 
     pairs = rating.iloc[:, :2].to_numpy()
     labels = rating.iloc[:, 2].to_numpy()
@@ -86,7 +93,7 @@ def _load_data_epinions(train_size):
         sub = rating[train_mask].query(f'rating_value == {i}').iloc[:, :2]\
             .to_numpy().tolist()
         tmp_graph = DGLGraph()
-        tmp_graph.add_nodes(189027)
+        tmp_graph.add_nodes(num_items + num_users)
         src, dst = tuple(zip(*sub))
         tmp_graph.add_edges(src, dst)
         tmp_graph.add_edges(dst, src)
@@ -99,13 +106,23 @@ def _load_data_epinions(train_size):
 
 def _load_data_ciao(train_size):
     '''loading dataset Ciao.'''
-    # social graph
+    # social relation data
     init_path = os.getcwd()
     trust_path = os.path.join(init_path, 'datasets/Ciao/trusts.txt')
     trust = pd.read_csv(trust_path, sep=',', header=None,
                         names=['trustorID', 'trusteeID', 'trustValue'])
+
+    # user-item data
+    rating_path = os.path.join(
+        init_path, 'datasets/Ciao/movie-ratings.txt')
+    rating = pd.read_csv(rating_path, sep=',', header=None,
+                         names=['userId', 'movieId', 'movieRating'], usecols=[0, 1, 4])
+
+    # social graph
+    num_users = max(trust.iloc[:, 0].max(),
+                    trust.iloc[:, 1].max(), rating.iloc[:, 0].max())
     g_homo = DGLGraph()
-    g_homo.add_nodes(30444)  # 30444 users
+    g_homo.add_nodes(num_users)  # number of users
     edge_list = trust.iloc[:, :2].to_numpy()
     edge_list -= 1  # counting from 0
     src, dst = tuple(zip(*edge_list.tolist()))
@@ -114,12 +131,9 @@ def _load_data_ciao(train_size):
     g_homo.add_edges(g_homo.nodes(), g_homo.nodes())  # add self-loop
 
     # user-item graph
-    rating_path = os.path.join(
-        init_path, 'datasets/Ciao/movie-ratings.txt')
-    rating = pd.read_csv(rating_path, sep=',', header=None,
-                         names=['userId', 'movieId', 'movieRating'], usecols=[0, 1, 4])
+    num_items = rating.iloc[:, 1].max()  # number of items
     rating.iloc[:, :2] -= 1  # counting from 0
-    rating.iloc[:, 1] += 30444  # for item indices
+    rating.iloc[:, 1] += num_users  # for item indices
 
     pairs = rating.iloc[:, :2].to_numpy()
     labels = rating.iloc[:, 2].to_numpy()
@@ -134,7 +148,7 @@ def _load_data_ciao(train_size):
         sub = rating[train_mask].query(f'movieRating == {i}').iloc[:, :2]\
             .to_numpy().tolist()
         tmp_graph = DGLGraph()
-        tmp_graph.add_nodes(46565)
+        tmp_graph.add_nodes(num_items + num_users)
         src, dst = tuple(zip(*sub))
         tmp_graph.add_edges(src, dst)
         tmp_graph.add_edges(dst, src)
@@ -147,6 +161,7 @@ def _load_data_ciao(train_size):
 
 def load_data(name, train_size=0.8):
     '''loading dataset.
+    |val set|:|test set| == 1:1
 
     Parameter
     ---------
